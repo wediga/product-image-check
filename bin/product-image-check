@@ -1,0 +1,21 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use ProductImageCheck\CheckCommand;
+use ProductImageCheck\ImageChecker;
+use Symfony\Component\Console\Application;
+
+require dirname(__DIR__) . '/vendor/autoload.php';
+
+// Large enough for GD to hold the biggest allowed image (ImageChecker::MAX_PIXELS).
+const MEMORY_LIMIT = '512M';
+
+ini_set('memory_limit', MEMORY_LIMIT);
+
+$command = new CheckCommand(new ImageChecker());
+$application = new Application('product-image-check');
+$application->addCommand($command);
+$application->setDefaultCommand($command->getName(), true);
+$application->run();
