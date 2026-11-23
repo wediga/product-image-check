@@ -13,6 +13,10 @@ final class ImageChecker
     public const int MAX_PIXELS = 50_000_000;
     public const int WHITE_THRESHOLD = 245;
 
+    // Light, almost colorless pixels are treated as soft shadows instead of product.
+    public const int SHADOW_MIN_LEVEL = 200;
+    public const int SHADOW_MAX_CHROMA = 18;
+
     public const string UNREADABLE = 'File is not a readable JPG or PNG';
     public const string TOO_LARGE = 'Image is too large to check (%d x %d pixels)';
     public const string RESOLUTION_TOO_LOW = 'Resolution %d x %d is too low, each side needs at least %d pixels';
@@ -27,6 +31,11 @@ final class ImageChecker
 
     // A product touching one side never covers half of the edge, so it still reaches the margin check.
     private const float MIN_WHITE_EDGE_SHARE = 0.5;
+
+    // A row or column needs this many product pixels, so that dust specks do not move the margins.
+    private const int MIN_LINE_PIXELS = 2;
+    private const int MIN_LINE_PERMILLE = 3;
+    private const int PERMILLE = 1000;
 
     private const int MIN_MARGIN_PERCENT = 5;
     private const int PERCENT = 100;
@@ -166,7 +175,7 @@ final class ImageChecker
             for ($x = 0; $x < $width; $x++) {
                 $color = imagecolorat($image, $x, $y);
 
-                if ($this->isWhiteOrTransparent($color)) {
+                if ($this->isTransparent($color) || $this->isWhiteOrShadow($color)) {
                     continue;
                 }
 
@@ -175,8 +184,8 @@ final class ImageChecker
             }
         }
 
-        $rows = array_keys(array_filter($rowCounts));
-        $columns = array_keys(array_filter($columnCounts));
+        $rows = $this->linesWithProduct($rowCounts, $width);
+        $columns = $this->linesWithProduct($columnCounts, $height);
 
         if ($rows === [] || $columns === []) {
             return null;
@@ -188,6 +197,13 @@ final class ImageChecker
             [self::SIDE_TOP, $rows[0], $height],
             [self::SIDE_BOTTOM, $height - 1 - end($rows), $height],
         ];
+    }
+
+    private function linesWithProduct(array $counts, int $lineLength): array
+    {
+        $minimum = max(self::MIN_LINE_PIXELS, (int) ceil($lineLength * self::MIN_LINE_PERMILLE / self::PERMILLE));
+
+        return array_keys(array_filter($counts, static fn (int $count): bool => $count >= $minimum));
     }
 
     private function marginProblems(array $margins): array
@@ -213,6 +229,14 @@ final class ImageChecker
     private function isTransparent(int $color): bool
     {
         return $color >> self::ALPHA_SHIFT === self::FULLY_TRANSPARENT;
+    }
+
+    private function isWhiteOrShadow(int $color): bool
+    {
+        $channels = $this->channels($color);
+        $darkest = min($channels);
+
+        return $darkest >= self::SHADOW_MIN_LEVEL && max($channels) - $darkest <= self::SHADOW_MAX_CHROMA;
     }
 
     private function channels(int $color): array

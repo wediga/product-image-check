@@ -24,6 +24,12 @@ final class ImageCheckerTest extends TestCase
     private const int EDGE_PIXELS = 3996;
     private const int WHITE_EDGE_PIXELS_BELOW_HALF = 1997;
     private const int PERCENT = 100;
+    private const int BAND_INSET = 10;
+    private const int BAND_HEIGHT = 5;
+    private const int SIDES_CROSSED_BY_BAND = 3;
+    private const int SPECK_START = 3;
+    private const int DUST_SIDE = 2;
+    private const int SMALLEST_VISIBLE_SIDE = 3;
     private const float KEPT_FILE_SHARE = 0.4;
     private const int PNG_HEADER_CHUNK_LENGTH = 13;
     private const string PNG_SIGNATURE = "\x89PNG\r\n\x1a\n";
@@ -110,6 +116,16 @@ final class ImageCheckerTest extends TestCase
         $this->assertSame([sprintf(ImageChecker::EDGE_NOT_WHITE, 0)], $this->checkPng($image));
     }
 
+    public function testExactlyHalfWhiteEdgeReachesTheMarginCheck(): void
+    {
+        $expected = [
+            sprintf(ImageChecker::MARGIN_TOO_SMALL, 0, ImageChecker::SIDE_RIGHT, self::MIN_MARGIN),
+            sprintf(ImageChecker::MARGIN_TOO_SMALL, 0, ImageChecker::SIDE_TOP, self::MIN_MARGIN),
+        ];
+
+        $this->assertSame($expected, $this->checkPng($this->imageWithHalfBlackEdge()));
+    }
+
     public function testLessThanHalfWhiteEdgeIsReported(): void
     {
         $image = $this->imageWithHalfBlackEdge();
@@ -186,6 +202,64 @@ final class ImageCheckerTest extends TestCase
         TestImages::drawProduct($image, self::MIN_MARGIN, self::MIN_MARGIN, self::FAR_END, self::FAR_END);
 
         $this->assertSame([], $this->checkPng($image));
+    }
+
+    public static function bandColors(): array
+    {
+        $level = ImageChecker::SHADOW_MIN_LEVEL;
+        $chroma = ImageChecker::SHADOW_MAX_CHROMA;
+
+        return [
+            'gray at shadow level' => [$level, $level, $level, 0],
+            'gray below shadow level' => [$level - 1, $level - 1, $level - 1, self::SIDES_CROSSED_BY_BAND],
+            'tint at chroma limit' => [$level + $chroma, $level, $level, 0],
+            'tint above chroma limit' => [$level + $chroma + 1, $level, $level, self::SIDES_CROSSED_BY_BAND],
+        ];
+    }
+
+    #[DataProvider('bandColors')]
+    public function testOnlyLightColorlessPixelsCountAsShadow(int $red, int $green, int $blue, int $problems): void
+    {
+        $image = $this->imageWithProduct();
+        imagefilledrectangle(
+            $image,
+            self::BAND_INSET,
+            self::LAST - self::BAND_INSET,
+            self::LAST - self::BAND_INSET,
+            self::LAST - self::BAND_HEIGHT,
+            imagecolorallocate($image, $red, $green, $blue),
+        );
+
+        $this->assertCount($problems, $this->checkPng($image));
+    }
+
+    public function testDustSpeckDoesNotMoveTheMargins(): void
+    {
+        $image = $this->imageWithProduct();
+        $this->drawSpeck($image, self::DUST_SIDE);
+
+        $this->assertSame([], $this->checkPng($image));
+    }
+
+    public function testBlobAtLineMinimumCountsAsProduct(): void
+    {
+        $image = $this->imageWithProduct();
+        $this->drawSpeck($image, self::SMALLEST_VISIBLE_SIDE);
+
+        $expected = [
+            sprintf(ImageChecker::MARGIN_TOO_SMALL, self::SPECK_START, ImageChecker::SIDE_LEFT, self::MIN_MARGIN),
+            sprintf(ImageChecker::MARGIN_TOO_SMALL, self::SPECK_START, ImageChecker::SIDE_TOP, self::MIN_MARGIN),
+        ];
+
+        $this->assertSame($expected, $this->checkPng($image));
+    }
+
+    public function testImageWithOnlyDustHasNoProduct(): void
+    {
+        $image = TestImages::whiteCanvas(self::SIZE, self::SIZE);
+        $this->drawSpeck($image, self::DUST_SIDE);
+
+        $this->assertSame([ImageChecker::NO_PRODUCT], $this->checkPng($image));
     }
 
     public static function unreadableContents(): array
@@ -271,6 +345,12 @@ final class ImageCheckerTest extends TestCase
         imageline($image, self::LAST, 1, self::LAST, self::LAST - 1, $black);
 
         return $image;
+    }
+
+    private function drawSpeck(GdImage $image, int $side): void
+    {
+        $end = self::SPECK_START + $side - 1;
+        TestImages::drawProduct($image, self::SPECK_START, self::SPECK_START, $end, $end);
     }
 
     private function truncate(string $path): void
