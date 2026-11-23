@@ -13,9 +13,17 @@ final class ImageCheckerTest extends TestCase
 {
     private const int SIZE = ImageChecker::MIN_SIDE_PX;
     private const int LAST = self::SIZE - 1;
+    private const int WIDE = self::SIZE * 2;
     private const int MIN_MARGIN = 50;
+    private const int MIN_MARGIN_WIDE = 100;
     private const int FAR_END = self::LAST - self::MIN_MARGIN;
+    private const int JPEG_ARTIFACT_BUFFER = 10;
     private const int CENTER = 500;
+    private const int GRAY = 128;
+    private const int TRANSPARENT = 127;
+    private const int EDGE_PIXELS = 3996;
+    private const int WHITE_EDGE_PIXELS_BELOW_HALF = 1997;
+    private const int PERCENT = 100;
     private const float KEPT_FILE_SHARE = 0.4;
     private const int PNG_HEADER_CHUNK_LENGTH = 13;
     private const string PNG_SIGNATURE = "\x89PNG\r\n\x1a\n";
@@ -37,6 +45,31 @@ final class ImageCheckerTest extends TestCase
         TestImages::removeDirectory($this->directory);
     }
 
+    public function testProductWithExactMinimumMarginsHasNoProblems(): void
+    {
+        $this->assertSame([], $this->checkPng($this->imageWithProduct()));
+    }
+
+    public function testCleanJpegHasNoProblems(): void
+    {
+        $path = $this->directory . '/image.jpg';
+        $image = TestImages::whiteCanvas(self::SIZE, self::SIZE);
+        $margin = self::MIN_MARGIN + self::JPEG_ARTIFACT_BUFFER;
+        TestImages::drawProduct($image, $margin, $margin, self::LAST - $margin, self::LAST - $margin);
+        imagejpeg($image, $path);
+
+        $this->assertSame([], $this->checker->check($path));
+    }
+
+    public function testPaletteImageIsCheckedByColorInsteadOfIndex(): void
+    {
+        $image = imagecreate(self::SIZE, self::SIZE);
+        imagecolorallocate($image, TestImages::WHITE, TestImages::WHITE, TestImages::WHITE);
+        TestImages::drawProduct($image, self::MIN_MARGIN, self::MIN_MARGIN, self::FAR_END, self::FAR_END);
+
+        $this->assertSame([], $this->checkPng($image));
+    }
+
     public static function tooSmallSizes(): array
     {
         return [
@@ -54,6 +87,105 @@ final class ImageCheckerTest extends TestCase
         $expected = sprintf(ImageChecker::RESOLUTION_TOO_LOW, $width, $height, ImageChecker::MIN_SIDE_PX);
 
         $this->assertSame([$expected], $this->checkPng($image));
+    }
+
+    public function testColoredBackgroundIsReportedWithoutMarginProblems(): void
+    {
+        $image = $this->filledCanvas(self::GRAY);
+
+        $this->assertSame([sprintf(ImageChecker::EDGE_NOT_WHITE, 0)], $this->checkPng($image));
+    }
+
+    public function testBackgroundAtWhiteThresholdCountsAsWhite(): void
+    {
+        $image = $this->filledCanvas(ImageChecker::WHITE_THRESHOLD);
+
+        $this->assertSame([ImageChecker::NO_PRODUCT], $this->checkPng($image));
+    }
+
+    public function testBackgroundJustBelowWhiteThresholdIsReported(): void
+    {
+        $image = $this->filledCanvas(ImageChecker::WHITE_THRESHOLD - 1);
+
+        $this->assertSame([sprintf(ImageChecker::EDGE_NOT_WHITE, 0)], $this->checkPng($image));
+    }
+
+    public function testLessThanHalfWhiteEdgeIsReported(): void
+    {
+        $image = $this->imageWithHalfBlackEdge();
+        imagesetpixel($image, self::LAST, self::LAST, imagecolorallocate($image, 0, 0, 0));
+
+        $share = self::WHITE_EDGE_PIXELS_BELOW_HALF / self::EDGE_PIXELS * self::PERCENT;
+
+        $this->assertSame([sprintf(ImageChecker::EDGE_NOT_WHITE, $share)], $this->checkPng($image));
+    }
+
+    public function testProductFillingTheFrameIsReportedAsEdgeProblem(): void
+    {
+        $image = TestImages::whiteCanvas(self::SIZE, self::SIZE);
+        TestImages::drawProduct($image, 0, 0, self::LAST, self::LAST);
+
+        $this->assertSame([sprintf(ImageChecker::EDGE_NOT_WHITE, 0)], $this->checkPng($image));
+    }
+
+    public function testProductTouchingOneEdgeIsReportedAsMargin(): void
+    {
+        $image = TestImages::whiteCanvas(self::SIZE, self::SIZE);
+        TestImages::drawProduct($image, 0, self::MIN_MARGIN, self::CENTER, self::FAR_END);
+
+        $expected = sprintf(ImageChecker::MARGIN_TOO_SMALL, 0, ImageChecker::SIDE_LEFT, self::MIN_MARGIN);
+
+        $this->assertSame([$expected], $this->checkPng($image));
+    }
+
+    public static function marginsOneBelowMinimum(): array
+    {
+        $near = self::MIN_MARGIN;
+        $far = self::FAR_END;
+
+        return [
+            'left' => [ImageChecker::SIDE_LEFT, $near - 1, $near, $far, $far],
+            'right' => [ImageChecker::SIDE_RIGHT, $near, $near, $far + 1, $far],
+            'top' => [ImageChecker::SIDE_TOP, $near, $near - 1, $far, $far],
+            'bottom' => [ImageChecker::SIDE_BOTTOM, $near, $near, $far, $far + 1],
+        ];
+    }
+
+    #[DataProvider('marginsOneBelowMinimum')]
+    public function testMarginOneBelowMinimumIsReported(string $side, int $left, int $top, int $right, int $bottom): void
+    {
+        $image = TestImages::whiteCanvas(self::SIZE, self::SIZE);
+        TestImages::drawProduct($image, $left, $top, $right, $bottom);
+
+        $expected = sprintf(ImageChecker::MARGIN_TOO_SMALL, self::MIN_MARGIN - 1, $side, self::MIN_MARGIN);
+
+        $this->assertSame([$expected], $this->checkPng($image));
+    }
+
+    public function testMarginIsMeasuredAgainstTheMatchingImageSide(): void
+    {
+        $image = TestImages::whiteCanvas(self::WIDE, self::SIZE);
+        TestImages::drawProduct($image, self::MIN_MARGIN, self::MIN_MARGIN, self::SIZE, self::FAR_END);
+
+        $expected = sprintf(
+            ImageChecker::MARGIN_TOO_SMALL,
+            self::MIN_MARGIN,
+            ImageChecker::SIDE_LEFT,
+            self::MIN_MARGIN_WIDE,
+        );
+
+        $this->assertSame([$expected], $this->checkPng($image));
+    }
+
+    public function testTransparentBackgroundCountsAsWhite(): void
+    {
+        $image = imagecreatetruecolor(self::SIZE, self::SIZE);
+        imagealphablending($image, false);
+        imagesavealpha($image, true);
+        imagefill($image, 0, 0, imagecolorallocatealpha($image, 0, 0, 0, self::TRANSPARENT));
+        TestImages::drawProduct($image, self::MIN_MARGIN, self::MIN_MARGIN, self::FAR_END, self::FAR_END);
+
+        $this->assertSame([], $this->checkPng($image));
     }
 
     public static function unreadableContents(): array
@@ -119,6 +251,24 @@ final class ImageCheckerTest extends TestCase
     {
         $image = TestImages::whiteCanvas(self::SIZE, self::SIZE);
         TestImages::drawProduct($image, self::MIN_MARGIN, self::MIN_MARGIN, self::FAR_END, self::FAR_END);
+
+        return $image;
+    }
+
+    private function filledCanvas(int $level): GdImage
+    {
+        $image = imagecreatetruecolor(self::SIZE, self::SIZE);
+        imagefill($image, 0, 0, imagecolorallocate($image, $level, $level, $level));
+
+        return $image;
+    }
+
+    private function imageWithHalfBlackEdge(): GdImage
+    {
+        $image = TestImages::whiteCanvas(self::SIZE, self::SIZE);
+        $black = imagecolorallocate($image, 0, 0, 0);
+        imageline($image, 0, 0, self::LAST, 0, $black);
+        imageline($image, self::LAST, 1, self::LAST, self::LAST - 1, $black);
 
         return $image;
     }
