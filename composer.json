@@ -1,0 +1,27 @@
+{
+    "name": "wediga/product-image-check",
+    "description": "Checks a directory of product images for resolution, white background and margins.",
+    "type": "project",
+    "require": {
+        "php": ">=8.3",
+        "ext-gd": "*",
+        "symfony/console": "^7.4"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^12.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "ProductImageCheck\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ProductImageCheck\\Tests\\": "tests/"
+        }
+    },
+    "bin": ["bin/product-image-check"],
+    "config": {
+        "sort-packages": true
+    }
+}
